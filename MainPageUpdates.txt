@@ -1,0 +1,166 @@
+    private async Task ShowWelcomeDialog()
+    {
+        string welcomeMessage = "Welcome to File Organizer V3! 🚀\n\n" +
+                               "🎨 STUNNING FEATURES:\n" +
+                               "• Beautiful animations and effects\n" +
+                               "• Scroll-based card transformations\n" +
+                               "• Shimmer button effects\n" +
+                               "• Smart file organization\n" +
+                               "• Advanced duplicate detection\n\n" +
+                               "📱 PERMISSIONS:\n" +
+                               "• The app will request storage permissions\n" +
+                               "• This allows access to your Downloads folder\n" +
+                               "• Required for organizing and scanning files\n\n" +
+                               "Choose an action to get started! ✨";
+
+        await DisplayAlert("Welcome", welcomeMessage, "Let's Go! 🚀");
+    }
+
+    private async void OnSortFilesClicked(object sender, EventArgs e)
+    {
+        try
+        {
+            await AnimateButtonWithShimmer(SortFilesButton, SortButtonShimmer);
+            SetUIBusy(true, "🔄 Organizing files with style...");
+
+            // Request permissions and get Downloads path
+            string downloadsPath;
+            try
+            {
+                downloadsPath = await _permissionsService.GetDownloadsPathWithPermissionCheck();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                await DisplayAlert("Permissions Required", 
+                    "Storage permissions are required to organize files. Please grant permissions in your device settings.", 
+                    "OK");
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                await DisplayAlert("Error", "Could not access Downloads folder", "OK");
+                return;
+            }
+
+            LogActivity($"📂 Scanning: {downloadsPath}");
+
+            await Task.Run(() => _fileScanner.FilterByType(downloadsPath));
+
+            int totalFiles = _fileScanner.FileGroups.Sum(group => group.Value.Count);
+            
+            if (totalFiles == 0)
+            {
+                LogActivity("ℹ️ No files found to organize");
+                await DisplayAlert("Info", "No files found to organize in Downloads folder", "OK");
+                return;
+            }
+
+            LogActivity($"📊 Found {totalFiles} files to organize");
+
+            int processedFiles = 0;
+
+            foreach (var category in _fileScanner.FileGroups)
+            {
+                foreach (string file in category.Value)
+                {
+                    try
+                    {
+                        string fileName = Path.GetFileName(file);
+                        await _fileMover.MoveFileToCategory(file, category.Key);
+                        
+                        LogActivity($"✅ Moved: {fileName} → {category.Key}");
+                        
+                        processedFiles++;
+                        await UpdateProgressAsync((double)processedFiles / totalFiles);
+                    }
+                    catch (Exception ex)
+                    {
+                        string fileName = Path.GetFileName(file);
+                        LogActivity($"❌ Failed to move {fileName}: {ex.Message}");
+                    }
+                }
+            }
+
+            await AnimateSpectacularSuccess();
+            UpdateQuickStats($"✨ Organized {processedFiles} files into categories");
+            LogActivity($"🎉 Organization complete! Processed {processedFiles} files");
+            await DisplayAlert("Success! 🎉", $"Successfully organized {processedFiles} files!", "Awesome! 🚀");
+        }
+        catch (Exception ex)
+        {
+            LogActivity($"💥 Error during organization: {ex.Message}");
+            await DisplayAlert("Error", $"An error occurred: {ex.Message}", "OK");
+        }
+        finally
+        {
+            SetUIBusy(false);
+        }
+    }
+
+    private async void OnFindDuplicatesClicked(object sender, EventArgs e)
+    {
+        try
+        {
+            await AnimateButtonWithShimmer(FindDuplicatesButton, DuplicateButtonShimmer);
+            SetUIBusy(true, "🔍 Finding duplicates with precision...");
+
+            // Request permissions and get Downloads path
+            string downloadsPath;
+            try
+            {
+                downloadsPath = await _permissionsService.GetDownloadsPathWithPermissionCheck();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                await DisplayAlert("Permissions Required", 
+                    "Storage permissions are required to scan for duplicates. Please grant permissions in your device settings.", 
+                    "OK");
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                await DisplayAlert("Error", "Could not access Downloads folder", "OK");
+                return;
+            }
+
+            LogActivity($"🔍 Scanning for duplicates in: {downloadsPath}");
+
+            var progress = new Progress<string>(message =>
+            {
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    ProgressLabel.Text = message;
+                    LogActivity(message);
+                });
+            });
+
+            var duplicates = await _duplicateDetector.FindDuplicatesAsync(downloadsPath, progress);
+
+            if (duplicates.Count == 0)
+            {
+                await AnimateSpectacularSuccess();
+                LogActivity("✨ No duplicates found!");
+                await DisplayAlert("Great News! ✨", "No duplicate files found!", "Excellent! 🎯");
+                return;
+            }
+
+            long wastedSpace = await _duplicateDetector.GetTotalWastedSpaceAsync();
+            string wastedSpaceFormatted = FormatFileSize(wastedSpace);
+
+            UpdateQuickStats($"🔍 Found {duplicates.Count} duplicate groups");
+            LogActivity($"🔍 Found {duplicates.Count} duplicate groups, wasting {wastedSpaceFormatted}");
+            
+            await DisplayAlert("Duplicates Found! 🔍", 
+                $"Found {duplicates.Count} groups of duplicate files\nWasted space: {wastedSpaceFormatted}", 
+                "OK");
+        }
+        catch (Exception ex)
+        {
+            LogActivity($"💥 Error during duplicate detection: {ex.Message}");
+            await DisplayAlert("Error", $"An error occurred: {ex.Message}", "OK");
+        }
+        finally
+        {
+            SetUIBusy(false);
+        }
+    }
