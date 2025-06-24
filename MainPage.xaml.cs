@@ -8,6 +8,8 @@ public partial class MainPage : ContentPage
     private readonly PermissionsService _permissionsService;
     private List<string> _selectedDuplicates = new();
     private readonly List<Border> _animatedCards = new();
+    private bool _isOperationInProgress = false;
+    private Button _activeButton = null;
 
     public MainPage()
     {
@@ -109,12 +111,9 @@ public partial class MainPage : ContentPage
     private async Task ShowWelcomeDialog()
     {
         string welcomeMessage = "Welcome to File Organizer V3! 🚀\n\n" +
-                               "🎨 STUNNING FEATURES:\n" +
-                               "• Beautiful animations and effects\n" +
-                               "• Scroll-based card transformations\n" +
-                               "• Shimmer button effects\n" +
                                "• Smart file organization\n" +
-                               "• Advanced duplicate detection\n\n" +
+                               "• NEW: Multi-folder duplicate detection (Downloads/Documents/Pictures/DCIM)\n" +
+                               "• NEW: Enhanced duplicate deletion with options\n\n" +
                                "Scroll and interact to see the magic! ✨";
 
         await DisplayAlert("Welcome", welcomeMessage, "Let's Go! 🚀");
@@ -125,7 +124,7 @@ public partial class MainPage : ContentPage
         try
         {
             await AnimateButtonWithShimmer(SortFilesButton, SortButtonShimmer);
-            SetUIBusy(true, "🔄 Organizing files with style...");
+            await SetUIBusy(true, "🔄 Organizing files...", SortFilesButton);
 
             string downloadsPath;
             try
@@ -175,17 +174,32 @@ public partial class MainPage : ContentPage
                     try
                     {
                         string fileName = Path.GetFileName(file);
+                        
+                        // Update progress with real-time info
+                        var progress = (double)processedFiles / totalFiles;
+                        var percentage = (int)(progress * 100);
+                        
+                        MainThread.BeginInvokeOnMainThread(() =>
+                        {
+                            ProgressLabel.Text = $"📁 Moving {fileName} → {category.Key} ({processedFiles + 1}/{totalFiles} - {percentage}%)";
+                            UpdateQuickStats($"📂 Processing: {processedFiles + 1}/{totalFiles} files ({percentage}%)");
+                        });
+                        
                         await _fileMover.MoveFileToCategory(file, category.Key);
                         
                         LogActivity($"✅ Moved: {fileName} → {category.Key}");
                         
                         processedFiles++;
                         await UpdateProgressAsync((double)processedFiles / totalFiles);
+                        
+                        // Small delay to show the progress visually
+                        await Task.Delay(50);
                     }
                     catch (Exception ex)
                     {
                         string fileName = Path.GetFileName(file);
                         LogActivity($"❌ Failed to move {fileName}: {ex.Message}");
+                        processedFiles++; // Still count as processed to maintain progress accuracy
                     }
                 }
             }
@@ -202,7 +216,7 @@ public partial class MainPage : ContentPage
         }
         finally
         {
-            SetUIBusy(false);
+            await SetUIBusy(false);
         }
     }
 
@@ -211,12 +225,67 @@ public partial class MainPage : ContentPage
         try
         {
             await AnimateButtonWithShimmer(FindDuplicatesButton, DuplicateButtonShimmer);
-            SetUIBusy(true, "🔍 Finding duplicates with precision...");
+            await SetUIBusy(true, "🔍 Finding duplicates across Downloads, Documents, Pictures...", FindDuplicatesButton);
 
-            string downloadsPath;
+            // Get multiple folder paths to search
+            var foldersToSearch = new List<string>();
+            var folderNames = new List<string>();
+            
             try
             {
-                downloadsPath = await _permissionsService.GetDownloadsPathWithPermissionCheck();
+                // Downloads folder
+                var downloadsPath = await _permissionsService.GetDownloadsPathWithPermissionCheck();
+                if (!string.IsNullOrEmpty(downloadsPath) && Directory.Exists(downloadsPath))
+                {
+                    foldersToSearch.Add(downloadsPath);
+                    folderNames.Add("Downloads");
+                }
+                
+                // Documents folder
+#if ANDROID
+                var documentsPath = Android.OS.Environment.GetExternalStoragePublicDirectory(
+                    Android.OS.Environment.DirectoryDocuments)?.AbsolutePath;
+                if (!string.IsNullOrEmpty(documentsPath) && Directory.Exists(documentsPath))
+                {
+                    foldersToSearch.Add(documentsPath);
+                    folderNames.Add("Documents");
+                }
+                
+                // Pictures folder
+                var picturesPath = Android.OS.Environment.GetExternalStoragePublicDirectory(
+                    Android.OS.Environment.DirectoryPictures)?.AbsolutePath;
+                if (!string.IsNullOrEmpty(picturesPath) && Directory.Exists(picturesPath))
+                {
+                    foldersToSearch.Add(picturesPath);
+                    folderNames.Add("Pictures");
+                }
+                
+                // DCIM folder (Camera photos)
+                var dcimPath = Android.OS.Environment.GetExternalStoragePublicDirectory(
+                    Android.OS.Environment.DirectoryDcim)?.AbsolutePath;
+                if (!string.IsNullOrEmpty(dcimPath) && Directory.Exists(dcimPath))
+                {
+                    foldersToSearch.Add(dcimPath);
+                    folderNames.Add("DCIM");
+                }
+#else
+                // For other platforms, add standard paths
+                var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var documentsPath = Path.Combine(userProfile, "Documents");
+                var picturesPath = Path.Combine(userProfile, "Pictures");
+                
+                if (Directory.Exists(documentsPath))
+                {
+                    foldersToSearch.Add(documentsPath);
+                    folderNames.Add("Documents");
+                }
+                
+                if (Directory.Exists(picturesPath))
+                {
+                    foldersToSearch.Add(picturesPath);
+                    folderNames.Add("Pictures");
+                }
+#endif
             }
             catch (UnauthorizedAccessException)
             {
@@ -225,19 +294,43 @@ public partial class MainPage : ContentPage
                     "OK");
                 return;
             }
-            catch (DirectoryNotFoundException)
+            catch (Exception ex)
             {
-                await DisplayAlert("Error", "Could not access Downloads folder", "OK");
+                await DisplayAlert("Error", $"Could not access folders: {ex.Message}", "OK");
                 return;
             }
             
-            if (string.IsNullOrEmpty(downloadsPath) || !Directory.Exists(downloadsPath))
+            if (foldersToSearch.Count == 0)
             {
-                await DisplayAlert("Error", "Could not access Downloads folder", "OK");
+                await DisplayAlert("Error", "Could not access any folders for scanning", "OK");
                 return;
             }
 
-            LogActivity($"🔍 Scanning for duplicates in: {downloadsPath}");
+            LogActivity($"🔍 Scanning for duplicates in: {string.Join(", ", folderNames)}");
+
+            // Debug: Check files in all directories
+            var allFiles = new List<string>();
+            foreach (var folder in foldersToSearch)
+            {
+                try
+                {
+                    var folderFiles = Directory.GetFiles(folder, "*", SearchOption.AllDirectories);
+                    allFiles.AddRange(folderFiles);
+                    LogActivity($"📂 Debug: {Path.GetFileName(folder)} - {folderFiles.Length} files");
+                }
+                catch (Exception ex)
+                {
+                    LogActivity($"❌ Debug: Error accessing {Path.GetFileName(folder)}: {ex.Message}");
+                }
+            }
+            
+            LogActivity($"📊 Debug: Found {allFiles.Count} total files across all folders");
+            
+            // Log first few files for debugging
+            for (int i = 0; i < Math.Min(5, allFiles.Count); i++)
+            {
+                LogActivity($"📄 Debug: File {i + 1}: {Path.GetFileName(allFiles[i])}");
+            }
 
             var progress = new Progress<string>(message =>
             {
@@ -248,13 +341,17 @@ public partial class MainPage : ContentPage
                 });
             });
 
-            var duplicates = await _duplicateDetector.FindDuplicatesAsync(downloadsPath, progress);
+            // Find duplicates across all folders by scanning all files together
+            var duplicates = await _duplicateDetector.FindDuplicatesInMultipleFoldersAsync(foldersToSearch, progress);
+            
+            // Debug: Log the actual result
+            LogActivity($"🔍 Debug: Duplicate detection returned {duplicates.Count} groups across all folders");
 
             if (duplicates.Count == 0)
             {
                 await AnimateSpectacularSuccess();
                 LogActivity("✨ No duplicates found!");
-                await DisplayAlert("Great News! ✨", "No duplicate files found!", "Excellent! ��");
+                await DisplayAlert("Great News! ✨", "No duplicate files found!", "Excellent! 🎉");
                 return;
             }
 
@@ -264,9 +361,34 @@ public partial class MainPage : ContentPage
             UpdateQuickStats($"🔍 Found {duplicates.Count} duplicate groups");
             LogActivity($"🔍 Found {duplicates.Count} duplicate groups, wasting {wastedSpaceFormatted}");
             
-            await DisplayAlert("Duplicates Found! 🔍", 
-                $"Found {duplicates.Count} groups of duplicate files\nWasted space: {wastedSpaceFormatted}", 
-                "OK");
+            // Debug: Log that we're about to show action sheet
+            LogActivity($"🔍 Debug: About to show action sheet for {duplicates.Count} groups");
+            
+            // Ask user what to do with duplicates
+            string action = await DisplayActionSheet(
+                $"🔍 Found {duplicates.Count} groups of duplicate files!\nWasted space: {wastedSpaceFormatted}\n\nWhat would you like to do?",
+                "Cancel",
+                null,
+                "🗑️ Delete Oldest Files",
+                "🗑️ Delete Newest Files",
+                "📋 View Details Only"
+            );
+            
+            // Debug: Log user's choice
+            LogActivity($"🔍 Debug: User selected: {action ?? "NULL"}");
+
+            if (action == "🗑️ Delete Oldest Files")
+            {
+                await DeleteDuplicates(true); // true = delete oldest
+            }
+            else if (action == "🗑️ Delete Newest Files")
+            {
+                await DeleteDuplicates(false); // false = delete newest
+            }
+            else if (action == "📋 View Details Only")
+            {
+                await ShowDuplicateDetails();
+            }
         }
         catch (Exception ex)
         {
@@ -275,7 +397,7 @@ public partial class MainPage : ContentPage
         }
         finally
         {
-            SetUIBusy(false);
+            await SetUIBusy(false);
         }
     }
 
@@ -305,26 +427,42 @@ public partial class MainPage : ContentPage
 
     private async Task AnimateButtonWithShimmer(Button button, Border shimmer)
     {
-        // Button press animation
+        try
+        {
+            // Haptic feedback for touch responsiveness
+            HapticFeedback.Default.Perform(HapticFeedbackType.Click);
+        }
+        catch
+        {
+            // Haptic feedback not available on this device
+        }
+        
+        // Enhanced button press animation with immediate feedback
         var pressTask = Task.WhenAll(
-            button.ScaleTo(0.95, 100, Easing.CubicOut),
-            button.FadeTo(0.8, 100, Easing.CubicOut)
+            button.ScaleTo(0.92, 80, Easing.CubicOut),
+            button.FadeTo(0.7, 80, Easing.CubicOut)
         );
         
-        // Shimmer effect
+        // Enhanced shimmer effect
         var shimmerTask = Task.WhenAll(
-            shimmer.FadeTo(0.6, 50, Easing.CubicOut),
-            shimmer.TranslateTo(400, 0, 400, Easing.CubicOut)
+            shimmer.FadeTo(0.8, 50, Easing.CubicOut),
+            shimmer.TranslateTo(450, 0, 350, Easing.CubicOut)
         );
         
         await Task.WhenAll(pressTask, shimmerTask);
         
-        // Reset animations
+        // Bounce back animation
         await Task.WhenAll(
-            button.ScaleTo(1, 100, Easing.CubicOut),
-            button.FadeTo(1, 100, Easing.CubicOut),
+            button.ScaleTo(1.02, 60, Easing.SpringOut),
+            button.FadeTo(1, 60, Easing.CubicOut)
+        );
+        
+        await button.ScaleTo(1, 40, Easing.CubicOut);
+        
+        // Reset shimmer
+        await Task.WhenAll(
             shimmer.FadeTo(0, 50, Easing.CubicOut),
-            shimmer.TranslateTo(-400, 0, 50, Easing.CubicOut)
+            shimmer.TranslateTo(-450, 0, 50, Easing.CubicOut)
         );
     }
 
@@ -380,27 +518,86 @@ public partial class MainPage : ContentPage
         });
     }
 
-    private async void SetUIBusy(bool isBusy, string operation = "")
+    private async Task SetUIBusy(bool isBusy, string operation = "", Button activeButton = null)
     {
-        MainThread.BeginInvokeOnMainThread(async () =>
+        await MainThread.InvokeOnMainThreadAsync(async () =>
         {
+            _isOperationInProgress = isBusy;
+            
+            // Disable all buttons and show loading states
             SortFilesButton.IsEnabled = !isBusy;
             FindDuplicatesButton.IsEnabled = !isBusy;
+            ClearLogButton.IsEnabled = !isBusy;
+            ExportLogButton.IsEnabled = !isBusy;
             
             if (isBusy)
             {
+                _activeButton = activeButton;
+                
+                // Show immediate feedback - button is working
+                if (_activeButton != null)
+                {
+                    _activeButton.Text = "⏳ Working...";
+                    _activeButton.BackgroundColor = Color.FromArgb("#4338CA"); // Darker shade
+                    
+                    // Start pulse animation for active button
+                    _ = StartButtonPulseAnimation(_activeButton);
+                }
+                
+                // Show progress section immediately
                 ProgressSection.IsVisible = true;
                 ProgressLabel.Text = operation;
+                ProgressBar.Progress = 0;
+                
+                // Immediate visibility for instant feedback
+                ProgressBar.Opacity = 1;
+                ProgressLabel.Opacity = 1;
                 
                 // Spectacular progress bar animation
                 await Task.WhenAll(
                     ProgressBar.ScaleTo(1, 400, Easing.SpringOut),
-                    ProgressLabel.FadeTo(1, 400, Easing.CubicOut)
+                    ProgressLabel.FadeTo(1, 200, Easing.CubicOut)
                 );
+                
+                // Start progress bar pulsing animation
+                _ = StartProgressBarPulseAnimation();
             }
             else
             {
-                await Task.Delay(800); // Show complete state
+                // Stop all animations first
+                _isOperationInProgress = false;
+                
+                // Restore button states
+                if (_activeButton != null)
+                {
+                    // Stop any ongoing scale animation
+                    _activeButton.AbortAnimation("ScaleAnimation");
+                    
+                    // Reset scale immediately
+                    _activeButton.Scale = 1.0;
+                    
+                    // Restore original button appearance
+                    if (_activeButton == SortFilesButton)
+                        _activeButton.Text = "✨ Sort Downloads Folder";
+                    else if (_activeButton == FindDuplicatesButton)
+                        _activeButton.Text = "🔎 Find Duplicates";
+                    else if (_activeButton == ClearLogButton)
+                        _activeButton.Text = "🧹 Clear";
+                    else if (_activeButton == ExportLogButton)
+                        _activeButton.Text = "📤 Export";
+                        
+                    _activeButton.BackgroundColor = null; // Reset to original
+                    _activeButton = null;
+                }
+                
+                // Stop progress bar animation
+                ProgressBar.AbortAnimation("FadeAnimation");
+                ProgressBar.Opacity = 1.0;
+                
+                // Show completion state briefly before hiding
+                ProgressLabel.Text = "✅ Complete!";
+                await Task.Delay(1000);
+                
                 await Task.WhenAll(
                     ProgressBar.ScaleTo(0, 400, Easing.CubicIn),
                     ProgressLabel.FadeTo(0, 400, Easing.CubicIn)
@@ -409,6 +606,53 @@ public partial class MainPage : ContentPage
                 ProgressBar.Progress = 0;
             }
         });
+    }
+
+    private async Task StartButtonPulseAnimation(Button button)
+    {
+        try
+        {
+            while (_isOperationInProgress && button != null)
+            {
+                if (!_isOperationInProgress) break;
+                
+                await button.ScaleTo(1.05, 600, Easing.SinInOut);
+                
+                if (!_isOperationInProgress) break;
+                
+                await button.ScaleTo(1.0, 600, Easing.SinInOut);
+            }
+        }
+        catch
+        {
+            // Animation was cancelled, reset scale
+            if (button != null)
+            {
+                button.Scale = 1.0;
+            }
+        }
+    }
+
+    private async Task StartProgressBarPulseAnimation()
+    {
+        try
+        {
+            while (_isOperationInProgress)
+            {
+                if (!_isOperationInProgress) break;
+                
+                await ProgressBar.FadeTo(0.7, 800, Easing.SinInOut);
+                
+                if (!_isOperationInProgress) break;
+                
+                await ProgressBar.FadeTo(1.0, 800, Easing.SinInOut);
+            }
+        }
+        catch
+        {
+            // Animation was cancelled, reset opacity
+            ProgressBar.Opacity = 1.0;
+        }
     }
 
     private async Task UpdateProgressAsync(double progress)
@@ -430,5 +674,157 @@ public partial class MainPage : ContentPage
             len = len / 1024;
         }
         return $"{len:0.##} {sizes[order]}";
+    }
+
+    private async Task DeleteDuplicates(bool deleteOldest)
+    {
+        try
+        {
+            await SetUIBusy(true, $"🗑️ Deleting {(deleteOldest ? "oldest" : "newest")} duplicate files...", null);
+            
+            var filesToDelete = new List<string>();
+            
+            // Build list of files to delete based on user choice
+            foreach (var group in _duplicateDetector.DuplicateGroups.Values)
+            {
+                if (group.Count > 1)
+                {
+                    // Sort files by creation time
+                    var sortedFiles = group.Select(file => new FileInfo(file))
+                                           .Where(fi => fi.Exists)
+                                           .OrderBy(fi => fi.CreationTime)
+                                           .ToList();
+                    
+                    if (sortedFiles.Count > 1)
+                    {
+                        if (deleteOldest)
+                        {
+                            // Delete all but the newest (last in sorted list)
+                            filesToDelete.AddRange(sortedFiles.Take(sortedFiles.Count - 1).Select(fi => fi.FullName));
+                        }
+                        else
+                        {
+                            // Delete all but the oldest (first in sorted list)
+                            filesToDelete.AddRange(sortedFiles.Skip(1).Select(fi => fi.FullName));
+                        }
+                    }
+                }
+            }
+
+            if (filesToDelete.Count == 0)
+            {
+                LogActivity("ℹ️ No files to delete");
+                await DisplayAlert("Info", "No duplicate files to delete", "OK");
+                return;
+            }
+
+            // Confirm deletion
+            bool confirm = await DisplayAlert("Confirm Deletion ⚠️", 
+                $"Are you sure you want to delete {filesToDelete.Count} duplicate files?\n\nThis action cannot be undone!", 
+                "Yes, Delete", "Cancel");
+
+            if (!confirm)
+            {
+                LogActivity("❌ Deletion cancelled by user");
+                return;
+            }
+
+            LogActivity($"🗑️ Starting deletion of {filesToDelete.Count} duplicate files...");
+
+            // Calculate space that will be freed BEFORE deletion
+            long spaceToFree = 0;
+            foreach (var file in filesToDelete)
+            {
+                try
+                {
+                    var fileInfo = new FileInfo(file);
+                    if (fileInfo.Exists)
+                    {
+                        spaceToFree += fileInfo.Length;
+                    }
+                }
+                catch { }
+            }
+
+            var progress = new Progress<string>(message =>
+            {
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    ProgressLabel.Text = message;
+                    LogActivity(message);
+                });
+            });
+
+            int deletedCount = await _duplicateDetector.DeleteDuplicatesAsync(filesToDelete, progress);
+            
+            await AnimateSpectacularSuccess();
+            UpdateQuickStats($"🗑️ Deleted {deletedCount} duplicate files");
+            LogActivity($"✅ Successfully deleted {deletedCount} duplicate files!");
+            
+            // Calculate actual space freed based on deletion success rate
+            long spaceFreed = (long)(spaceToFree * ((double)deletedCount / filesToDelete.Count));
+            
+            string spaceFreedFormatted = FormatFileSize(spaceFreed);
+            await DisplayAlert("Success! 🎉", 
+                $"Successfully deleted {deletedCount} duplicate files!\nSpace freed: {spaceFreedFormatted}", 
+                "Awesome! 🚀");
+        }
+        catch (Exception ex)
+        {
+            LogActivity($"❌ Error during deletion: {ex.Message}");
+            await DisplayAlert("Error", $"An error occurred during deletion: {ex.Message}", "OK");
+        }
+        finally
+        {
+            await SetUIBusy(false);
+        }
+    }
+
+    private async Task ShowDuplicateDetails()
+    {
+        try
+        {
+            string details = "📋 DUPLICATE FILES DETAILS:\n\n";
+            int groupNumber = 1;
+            
+            foreach (var group in _duplicateDetector.DuplicateGroups.Values.Take(5)) // Show first 5 groups
+            {
+                details += $"Group {groupNumber}:\n";
+                
+                foreach (var file in group)
+                {
+                    string fileName = Path.GetFileName(file);
+                    string fileSize = _duplicateDetector.GetFileSize(file);
+                    string fileDate = "";
+                    
+                    try
+                    {
+                        var fileInfo = new FileInfo(file);
+                        fileDate = fileInfo.CreationTime.ToString("yyyy-MM-dd HH:mm");
+                    }
+                    catch { }
+                    
+                    details += $"  📄 {fileName} ({fileSize}) - {fileDate}\n";
+                }
+                details += "\n";
+                groupNumber++;
+            }
+            
+            if (_duplicateDetector.DuplicateGroups.Count > 5)
+            {
+                details += $"... and {_duplicateDetector.DuplicateGroups.Count - 5} more groups\n";
+            }
+            
+            long wastedSpace = await _duplicateDetector.GetTotalWastedSpaceAsync();
+            details += $"\n💾 Total wasted space: {FormatFileSize(wastedSpace)}";
+            
+            await DisplayAlert("Duplicate Details 📋", details, "OK");
+            LogActivity("📋 Showed duplicate file details");
+        }
+        catch (Exception ex)
+        {
+            LogActivity($"❌ Error showing details: {ex.Message}");
+            await DisplayAlert("Error", $"Error showing details: {ex.Message}", "OK");
+        }
     }
 }

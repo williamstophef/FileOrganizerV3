@@ -46,6 +46,21 @@
                 <GradientStop Color="#40FFFFFF" Offset="0.5" />
                 <GradientStop Color="Transparent" Offset="1.0" />
             </LinearGradientBrush>
+            
+            <!-- Responsive Styles for Better Text Handling -->
+            <Style x:Key="CardHeaderStyle" TargetType="Label">
+                <Setter Property="FontSize" Value="20" />
+                <Setter Property="FontAttributes" Value="Bold" />
+                <Setter Property="TextColor" Value="{StaticResource TextPrimary}" />
+                <Setter Property="VerticalOptions" Value="Center" />
+                <Setter Property="HorizontalOptions" Value="StartAndExpand" />
+                <Setter Property="LineBreakMode" Value="TailTruncation" />
+            </Style>
+            
+            <Style x:Key="CardIconStyle" TargetType="Label">
+                <Setter Property="FontSize" Value="24" />
+                <Setter Property="VerticalOptions" Value="Center" />
+            </Style>
         </ResourceDictionary>
     </ContentPage.Resources>
 
@@ -54,12 +69,13 @@
 
             <!-- Header with Enhanced Animation -->
             <VerticalStackLayout Spacing="12" x:Name="HeaderSection">
-                <Label Text="🚀 File Organizer V3"
-                       FontSize="36"
+                <Label Text="🚀 File Organizer"
+                       FontSize="30"
                        FontAttributes="Bold"
                        HorizontalOptions="Center"
                        TextColor="{StaticResource TextPrimary}"
-                       Opacity="0">
+                       Opacity="0"
+                       LineBreakMode="TailTruncation">
                     <Label.Shadow>
                         <Shadow Brush="{StaticResource PrimaryAccent}" 
                                 Offset="0,4" 
@@ -68,11 +84,13 @@
                     </Label.Shadow>
                 </Label>
 
-                <Label Text="Organize files and find duplicates with style ✨"
-                       FontSize="16"
+                <Label Text="Organize Downloads folder and find duplicate files✨"
+                       FontSize="14"
                        HorizontalOptions="Center"
                        TextColor="{StaticResource TextSecondary}"
-                       Opacity="0" />
+                       Opacity="0"
+                       LineBreakMode="WordWrap"
+                       HorizontalTextAlignment="Center" />
             </VerticalStackLayout>
 
             <!-- File Organization Card with Shimmer -->
@@ -93,15 +111,17 @@
                 
                 <VerticalStackLayout Spacing="20">
                     <!-- Header with Icon and Title -->
-                    <HorizontalStackLayout Spacing="16">
+                    <HorizontalStackLayout Spacing="12">
                         <Label Text="📁" 
-                               FontSize="28" 
+                               FontSize="24" 
                                VerticalOptions="Center" />
                         <Label Text="File Organization"
-                               FontSize="24"
+                               FontSize="20"
                                FontAttributes="Bold"
                                TextColor="{StaticResource TextPrimary}"
-                               VerticalOptions="Center" />
+                               VerticalOptions="Center"
+                               HorizontalOptions="StartAndExpand"
+                               LineBreakMode="TailTruncation" />
                     </HorizontalStackLayout>
                     
                     <Label Text="Automatically sort files by type into organized folders"
@@ -157,15 +177,17 @@
                 </Border.Shadow>
                 
                 <VerticalStackLayout Spacing="20">
-                    <HorizontalStackLayout Spacing="16">
+                    <HorizontalStackLayout Spacing="12">
                         <Label Text="🔍" 
-                               FontSize="28" 
+                               FontSize="24" 
                                VerticalOptions="Center" />
                         <Label Text="Duplicate Detection"
-                               FontSize="24"
+                               FontSize="20"
                                FontAttributes="Bold"
                                TextColor="{StaticResource TextPrimary}"
-                               VerticalOptions="Center" />
+                               VerticalOptions="Center"
+                               HorizontalOptions="StartAndExpand"
+                               LineBreakMode="TailTruncation" />
                     </HorizontalStackLayout>
                     
                     <Label Text="Find and remove duplicate files to free up valuable storage space"

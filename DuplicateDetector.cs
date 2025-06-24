@@ -61,6 +61,71 @@ namespace FileOrganizerV3
             }
         }
 
+        public async Task<Dictionary<string, List<string>>> FindDuplicatesInMultipleFoldersAsync(List<string> directoryPaths, IProgress<string> progress = null)
+        {
+            DuplicateGroups.Clear();
+            var fileHashes = new Dictionary<string, List<string>>();
+
+            try
+            {
+                // Collect all files from all directories
+                var allFiles = new List<string>();
+                foreach (var directoryPath in directoryPaths)
+                {
+                    if (Directory.Exists(directoryPath))
+                    {
+                        var files = Directory.GetFiles(directoryPath, "*", SearchOption.AllDirectories);
+                        allFiles.AddRange(files);
+                        progress?.Report($"Found {files.Length} files in {Path.GetFileName(directoryPath)}");
+                    }
+                    else
+                    {
+                        progress?.Report($"Directory does not exist: {directoryPath}");
+                    }
+                }
+
+                progress?.Report($"Found {allFiles.Count} total files across all folders to analyze");
+
+                int processedFiles = 0;
+                foreach (var file in allFiles)
+                {
+                    try
+                    {
+                        processedFiles++;
+                        progress?.Report($"Processing {processedFiles}/{allFiles.Count}: {Path.GetFileName(file)}");
+
+                        string hash = await CalculateFileHashAsync(file);
+                        
+                        if (!fileHashes.ContainsKey(hash))
+                        {
+                            fileHashes[hash] = new List<string>();
+                        }
+                        
+                        fileHashes[hash].Add(file);
+                    }
+                    catch (Exception ex)
+                    {
+                        progress?.Report($"Error processing {file}: {ex.Message}");
+                        continue;
+                    }
+                }
+
+                foreach (var kvp in fileHashes.Where(h => h.Value.Count > 1))
+                {
+                    string duplicateKey = $"Group_{DuplicateGroups.Count + 1}_{Path.GetFileName(kvp.Value.First())}";
+                    DuplicateGroups[duplicateKey] = kvp.Value;
+                }
+
+                progress?.Report($"Analysis complete. Found {DuplicateGroups.Count} duplicate groups across all folders");
+                return DuplicateGroups;
+            }
+            catch (Exception ex)
+            {
+                progress?.Report($"Error during duplicate detection: {ex.Message}");
+                throw;
+            }
+        }
+
         private async Task<string> CalculateFileHashAsync(string filePath)
         {
             using var stream = File.OpenRead(filePath);
